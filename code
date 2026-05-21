@@ -1,0 +1,438 @@
+"""
+VPN Sales Telegram Bot
+Usage: python bot.py
+"""
+
+import logging
+import json
+import os
+import subprocess
+from datetime import datetime, timedelta
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup,
+    LabeledPrice, ShippingAddress
+)
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ContextTypes, PreCheckoutQueryHandler
+)
+
+# ── Configuration ──────────────────────────────────────────────────────────────
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8643358500:AAGRlhP19NSBSzbVKmCVJatmSBWhioFdvVE")
+ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "8769232009").split(",")]
+PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN", "YOUR_PAYMENT_TOKEN")  # from @BotFather
+
+# File-based storage (replace with a real DB in production)
+DB_FILE = "orders.json"
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
+
+# ── Plans ──────────────────────────────────────────────────────────────────────
+PLANS = {
+    "1m": {
+        "name": "🥉 Базовый — 1 месяц",
+        "price": 90,           # RUB
+        "days": 30,
+        "devices": 1,
+        "speed": "100 Мбит/с",
+        "emoji": "🥉",
+    },
+    "3m": {
+        "name": "🥈 Стандарт — 3 месяца",
+        "price": 250,
+        "days": 90,
+        "devices": 3,
+        "speed": "100 Мбит/с",
+        "emoji": "🥈",
+    },
+    "6m": {
+        "name": "🥇 Премиум — 6 месяцев",
+        "price": 450,
+        "days": 180,
+        "devices": 5,
+        "speed": "100 Мбит/с",
+        "emoji": "🥇",
+    },
+    "1y": {
+        "name": "💎 Годовой — 12 месяцев",
+        "price": 850,
+        "days": 365,
+        "devices": 10,
+        "speed": "100 Мбит/с",
+        "emoji": "💎",
+    },
+}
+
+# ── Mock VPN config generator ──────────────────────────────────────────────────
+def generate_vpn_config(user_id: int, plan_key: str) -> str:
+    """
+    In production: call your VPN panel API (3x-UI, Outline, WireGuard, etc.)
+    and return a real config / access URL.
+    """
+    plan = PLANS[plan_key]
+    expires = (datetime.now() + timedelta(days=plan["days"])).strftime("%d.%m.%Y")
+    return (
+        f"# VPN Config — {plan['name']}\n"
+        f"# User: {user_id}  |  Expires: {expires}\n\n"
+        f"[Interface]\n"
+        f"PrivateKey = DEMO_PRIVATE_KEY_{user_id}\n"
+        f"Address = 10.0.0.{user_id % 254 + 1}/32\n"
+        f"DNS = 1.1.1.1\n\n"
+        f"[Peer]\n"
+        f"PublicKey = DEMO_SERVER_PUBLIC_KEY\n"
+        f"AllowedIPs = 0.0.0.0/0\n"
+        f"Endpoint = vpn.example.com:51820\n"
+        f"PersistentKeepalive = 25\n"
+    )
+
+# ── Storage helpers ────────────────────────────────────────────────────────────
+def load_db() -> dict:
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"orders": [], "users": {}}
+
+def save_db(db: dict) -> None:
+    with open(DB_FILE, "w", encoding="utf-8") as f:
+        json.dump(db, f, ensure_ascii=False, indent=2)
+
+def save_order(user_id: int, username: str, plan_key: str, amount: int) -> dict:
+    db = load_db()
+    order = {
+        "id": len(db["orders"]) + 1,
+        "user_id": user_id,
+        "username": username or str(user_id),
+        "plan": plan_key,
+        "amount": amount,
+        "date": datetime.now().isoformat(),
+        "expires": (datetime.now() + timedelta(days=PLANS[plan_key]["days"])).isoformat(),
+    }
+    db["orders"].append(order)
+    db["users"][str(user_id)] = {
+        "plan": plan_key,
+        "expires": order["expires"],
+        "username": username,
+    }
+    save_db(db)
+    return order
+
+def get_user_sub(user_id: int) -> dict | None:
+    db = load_db()
+    return db["users"].get(str(user_id))
+
+# ── Keyboards ──────────────────────────────────────────────────────────────────
+def main_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🛒 Купить VPN", callback_data="buy")],
+        [InlineKeyboardButton("📋 Мой аккаунт", callback_data="account"),
+         InlineKeyboardButton("ℹ️ О сервисе", callback_data="about")],
+        [InlineKeyboardButton("🆘 Поддержка", url="https://t.me/xsanvpnsup_bot")],
+    ])
+
+def plans_kb() -> InlineKeyboardMarkup:
+    rows = []
+    for key, plan in PLANS.items():
+        rows.append([InlineKeyboardButton(
+            f"{plan['emoji']} {plan['name']} — {plan['price']} ₽",
+            callback_data=f"plan:{key}"
+        )])
+    rows.append([InlineKeyboardButton("◀️ Назад", callback_data="menu")])
+    return InlineKeyboardMarkup(rows)
+
+def plan_detail_kb(plan_key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💳 Оплатить через Telegram", callback_data=f"pay:{plan_key}")],
+        [InlineKeyboardButton("💸 Оплатить криптой / переводом", callback_data=f"manual:{plan_key}")],
+        [InlineKeyboardButton("◀️ К тарифам", callback_data="buy")],
+    ])
+
+# ── Handlers ───────────────────────────────────────────────────────────────────
+async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    text = (
+        f"👋 Привет, <b>{user.first_name}</b>!\n\n"
+        "🔒 <b>SecureVPN</b> — быстрый и надёжный VPN-сервис.\n\n"
+        "✅ Более <b>3 серверов</b> по всему миру\n"
+        "✅ WireGuard + OpenVPN протоколы\n"
+        "✅ Нет логов, нет ограничений\n"
+        "✅ Работает в России 🇷🇺\n\n"
+        "Выберите действие:"
+    )
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=main_menu_kb())
+
+
+async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    # ── Main menu ──
+    if data == "menu":
+        await query.edit_message_text(
+            "🏠 <b>Главное меню</b>\n\nВыберите действие:",
+            parse_mode="HTML", reply_markup=main_menu_kb()
+        )
+
+    # ── Plan list ──
+    elif data == "buy":
+        await query.edit_message_text(
+            "🛒 <b>Выберите тариф</b>\n\n"
+            "Все тарифы включают безлимитный трафик и 24/7 поддержку:",
+            parse_mode="HTML", reply_markup=plans_kb()
+        )
+
+    # ── Plan detail ──
+    elif data.startswith("plan:"):
+        key = data.split(":")[1]
+        p = PLANS[key]
+        text = (
+            f"{p['emoji']} <b>{p['name']}</b>\n\n"
+            f"💰 Цена: <b>{p['price']} ₽</b>\n"
+            f"📅 Срок: <b>{p['days']} дней</b>\n"
+            f"📱 Устройства: <b>{p['devices']} шт.</b>\n"
+            f"⚡ Скорость: <b>{p['speed']}</b>\n"
+            f"🌍 Серверы: <b>30+ стран</b>\n"
+            f"🔒 Протокол: WireGuard / OpenVPN\n\n"
+            "Выберите способ оплаты:"
+        )
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=plan_detail_kb(key))
+
+    # ── Telegram Pay ──
+    elif data.startswith("pay:"):
+        key = data.split(":")[1]
+        plan = PLANS[key]
+        await query.message.reply_invoice(
+            title=plan["name"],
+            description=(
+                f"{plan['days']} дней VPN | {plan['devices']} устройств | "
+                f"{plan['speed']} | 30+ серверов"
+            ),
+            payload=f"vpn_{key}_{query.from_user.id}",
+            provider_token=PAYMENT_PROVIDER_TOKEN,
+            currency="RUB",
+            prices=[LabeledPrice(plan["name"], plan["price"] * 100)],
+            protect_content=True,
+        )
+
+    # ── Manual pay ──
+    elif data.startswith("manual:"):
+        key = data.split(":")[1]
+        plan = PLANS[key]
+        text = (
+            f"💸 <b>Ручная оплата — {plan['name']}</b>\n\n"
+            f"Сумма: <b>{plan['price']} ₽</b>\n\n"
+            "Способы оплаты:\n"
+            "• <b>USDT (TRC-20):</b> <code>UQCTobbYPRi2NTrKhFaRvi4lC7g6Th36PSy4FGq-9C1ifpkD</code>\n"
+            "• <b>TON:</b> <code>UQCTobbYPRi2NTrKhFaRvi4lC7g6Th36PSy4FGq-9C1ifpkD</code>\n"
+            "• <b>Переводом :</b>2200154519559719 Альфа Банк\n\n"
+            "После оплаты отправьте скриншот или хэш транзакции "
+            "в поддержку 👉 @xcz6769\n\n"
+            "⏱ Активация в течение 15 минут."
+        )
+        await query.edit_message_text(
+            text, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("◀️ Назад", callback_data=f"plan:{key}")]
+            ])
+        )
+
+    # ── Account ──
+    elif data == "account":
+        sub = get_user_sub(query.from_user.id)
+        if sub:
+            expires = datetime.fromisoformat(sub["expires"])
+            days_left = (expires - datetime.now()).days
+            plan = PLANS.get(sub["plan"], {})
+            text = (
+                f"📋 <b>Ваш аккаунт</b>\n\n"
+                f"🟢 Статус: <b>Активна</b>\n"
+                f"📦 Тариф: <b>{plan.get('name', sub['plan'])}</b>\n"
+                f"📅 Действует до: <b>{expires.strftime('%d.%m.%Y')}</b>\n"
+                f"⏳ Осталось: <b>{max(days_left, 0)} дней</b>\n\n"
+                "Для получения конфига нажмите кнопку ниже:"
+            )
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📥 Получить конфиг", callback_data="getconfig")],
+                [InlineKeyboardButton("🔄 Продлить подписку", callback_data="buy")],
+                [InlineKeyboardButton("◀️ Назад", callback_data="menu")],
+            ])
+        else:
+            text = (
+                "📋 <b>Ваш аккаунт</b>\n\n"
+                "❌ У вас нет активной подписки.\n\n"
+                "Купите VPN, чтобы начать пользоваться:"
+            )
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🛒 Купить VPN", callback_data="buy")],
+                [InlineKeyboardButton("◀️ Назад", callback_data="menu")],
+            ])
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+
+    # ── Get config ──
+    elif data == "getconfig":
+        sub = get_user_sub(query.from_user.id)
+        if not sub:
+            await query.answer("❌ Подписка не найдена.", show_alert=True)
+            return
+        config = generate_vpn_config(query.from_user.id, sub["plan"])
+        await query.message.reply_document(
+            document=config.encode(),
+            filename=f"vpn_config_{query.from_user.id}.conf",
+            caption=(
+                "📥 <b>Ваш VPN-конфиг</b>\n\n"
+                "Импортируйте файл в WireGuard-клиент:\n"
+                "• Android / iOS: приложение <b>WireGuard</b>\n"
+                "• Windows / macOS: <b>WireGuard</b> с официального сайта\n"
+                "• Linux: <code>sudo wg-quick up ./config.conf</code>"
+            ),
+            parse_mode="HTML"
+        )
+
+    # ── About ──
+    elif data == "about":
+        text = (
+            "ℹ️ <b>О сервисе SecureVPN</b>\n\n"
+            "🌍 <b>3+ серверов</b> в Европе, Азии, Америке\n"
+            "⚡ Протокол <b>WireGuard</b> — самый быстрый\n"
+            "🔒 <b>No-Log политика</b> — мы ничего не храним\n"
+            "📱 Поддержка <b>всех платформ</b>: iOS, Android, Windows, macOS, Linux\n"
+            "🛡 Обход блокировок: YouTube, Instagram, Netflix и др.\n"
+            "💬 Поддержка 24/7 в @xcz6769\n\n"
+            "Работаем с 2021 года. Более 50 000 довольных клиентов."
+        )
+        await query.edit_message_text(
+            text, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🛒 Купить VPN", callback_data="buy")],
+                [InlineKeyboardButton("◀️ Назад", callback_data="menu")],
+            ])
+        )
+
+
+# ── Payment handlers ───────────────────────────────────────────────────────────
+async def pre_checkout(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.pre_checkout_query
+    await query.answer(ok=True)
+
+
+async def successful_payment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    payment = update.message.successful_payment
+    payload = payment.invoice_payload          # "vpn_3m_123456"
+    parts = payload.split("_")
+    plan_key = parts[1]                        # "3m"
+    user = update.effective_user
+    plan = PLANS[plan_key]
+
+    order = save_order(user.id, user.username, plan_key, payment.total_amount // 100)
+    config = generate_vpn_config(user.id, plan_key)
+    expires = datetime.fromisoformat(order["expires"]).strftime("%d.%m.%Y")
+
+    await update.message.reply_text(
+        f"✅ <b>Оплата прошла успешно!</b>\n\n"
+        f"📦 Тариф: <b>{plan['name']}</b>\n"
+        f"📅 Активен до: <b>{expires}</b>\n"
+        f"🆔 Заказ: #{order['id']}\n\n"
+        "Ваш VPN-конфиг прикреплён ниже 👇",
+        parse_mode="HTML"
+    )
+    await update.message.reply_document(
+        document=config.encode(),
+        filename=f"vpn_{user.id}.conf",
+        caption="📥 Импортируйте этот файл в <b>WireGuard</b>",
+        parse_mode="HTML"
+    )
+    logger.info(f"New order #{order['id']}: user={user.id} plan={plan_key}")
+
+
+# ── Admin commands ─────────────────────────────────────────────────────────────
+async def admin_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Нет доступа.")
+        return
+    db = load_db()
+    total = len(db["orders"])
+    revenue = sum(o["amount"] for o in db["orders"])
+    active = sum(
+        1 for u in db["users"].values()
+        if datetime.fromisoformat(u["expires"]) > datetime.now()
+    )
+    plan_counts = {}
+    for o in db["orders"]:
+        plan_counts[o["plan"]] = plan_counts.get(o["plan"], 0) + 1
+
+    lines = [f"  {PLANS[k]['name']}: {v}" for k, v in plan_counts.items()]
+    await update.message.reply_text(
+        f"📊 <b>Статистика</b>\n\n"
+        f"🧾 Всего заказов: <b>{total}</b>\n"
+        f"💰 Выручка: <b>{revenue} ₽</b>\n"
+        f"🟢 Активных подписок: <b>{active}</b>\n\n"
+        f"По тарифам:\n" + "\n".join(lines),
+        parse_mode="HTML"
+    )
+
+
+async def admin_give(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Usage: /give <user_id> <plan_key>"""
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Нет доступа.")
+        return
+    args = ctx.args
+    if len(args) != 2:
+        await update.message.reply_text("Использование: /give <user_id> <plan_key>")
+        return
+    uid, plan_key = int(args[0]), args[1]
+    if plan_key not in PLANS:
+        await update.message.reply_text(f"Неверный тариф. Доступны: {', '.join(PLANS)}")
+        return
+    order = save_order(uid, str(uid), plan_key, 0)
+    await update.message.reply_text(
+        f"✅ Подписка <b>{PLANS[plan_key]['name']}</b> выдана пользователю {uid}\n"
+        f"Активна до: {datetime.fromisoformat(order['expires']).strftime('%d.%m.%Y')}",
+        parse_mode="HTML"
+    )
+
+
+def get_git_url():
+    """Получить URL Git-репозитория из папки с ботом"""
+    try:
+        url = subprocess.check_output(
+            ['git', 'config', '--get', 'remote.origin.url'],
+            text=True,
+            stderr=subprocess.DEVNULL
+        ).strip()
+        return url
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "Git репозиторий не найден"
+
+
+async def admin_git_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Нет доступа.")
+        return
+    
+    git_url = get_git_url()
+    await update.message.reply_text(f"📦 Git URL: {git_url}")
+
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+def main() -> None:
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("stats", admin_stats))
+    app.add_handler(CommandHandler("give", admin_give))
+    app.add_handler(CommandHandler("giturl", admin_git_url))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(PreCheckoutQueryHandler(pre_checkout))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+
+    logger.info("Bot started.")
+    app.run_polling(drop_pending_updates=True)
+
+
+if __name__ == "__main__":
+    main()
