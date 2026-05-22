@@ -1,4 +1,4 @@
-"""
+[22.05.2026 8:40] Xcz: """
 VPN Sales Telegram Bot
 Usage: python bot.py
 """
@@ -67,6 +67,12 @@ PLANS = {
     },
 }
 
+# ── Free VPN settings ──────────────────────────────────────────────────────────
+FREE_VPN_KEY = "vless://a9018bd6-f052-4aac-89ef-c1888edfe83c@31.207.5.217:444/?type=tcp&encryption=none&security=reality&pbk=A4KzYILt0DsW8bjouUQQ2NuBZr8epiX6o-QrKVj_gzE&fp=chrome&sni=www.nvidia.com&sid=0b&spx=%2F#p152xak8"
+FREE_CHANNEL = "@xsanvpn"
+FREE_CHANNEL_LINK = "https://t.me/xsanvpn"
+FREE_VPN_DAYS = 10
+
 # ── Mock VPN config generator ──────────────────────────────────────────────────
 def generate_vpn_config(user_id: int, plan_key: str) -> str:
     """
@@ -94,7 +100,7 @@ def load_db() -> dict:
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"orders": [], "users": {}}
+    return {"orders": [], "users": {}, "free_users": {}}
 
 def save_db(db: dict) -> None:
     with open(DB_FILE, "w", encoding="utf-8") as f:
@@ -117,16 +123,31 @@ def save_order(user_id: int, username: str, plan_key: str, amount: int) -> dict:
         "expires": order["expires"],
         "username": username,
     }
-    save_db(db)
+[22.05.2026 8:40] Xcz: save_db(db)
     return order
 
 def get_user_sub(user_id: int) -> dict | None:
     db = load_db()
     return db["users"].get(str(user_id))
 
+def has_used_free_vpn(user_id: int) -> bool:
+    db = load_db()
+    return str(user_id) in db.get("free_users", {})
+
+def mark_free_vpn_used(user_id: int) -> None:
+    db = load_db()
+    if "free_users" not in db:
+        db["free_users"] = {}
+    db["free_users"][str(user_id)] = {
+        "date": datetime.now().isoformat(),
+        "expires": (datetime.now() + timedelta(days=FREE_VPN_DAYS)).isoformat(),
+    }
+    save_db(db)
+
 # ── Keyboards ──────────────────────────────────────────────────────────────────
 def main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🆓 Бесплатный VPN на 10 дней", callback_data="free_vpn")],
         [InlineKeyboardButton("🛒 Купить VPN", callback_data="buy")],
         [InlineKeyboardButton("📋 Мой аккаунт", callback_data="account"),
          InlineKeyboardButton("ℹ️ О сервисе", callback_data="about")],
@@ -175,6 +196,80 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         await query.edit_message_text(
             "🏠 <b>Главное меню</b>\n\nВыберите действие:",
             parse_mode="HTML", reply_markup=main_menu_kb()
+        )
+
+    # ── Free VPN ──
+    elif data == "free_vpn":
+        if has_used_free_vpn(query.from_user.id):
+            db = load_db()
+            free_info = db["free_users"][str(query.from_user.id)]
+            expires = datetime.fromisoformat(free_info["expires"]).strftime("%d.%m.%Y")
+            await query.edit_message_text(
+                f"⚠️ <b>Вы уже получали бесплатный VPN</b>\n\n"
+                f"Ключ действует до: <b>{expires}</b>\n\n"
+                "Для продолжения пользования купите подписку:",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🛒 Купить VPN", callback_data="buy")],
+                    [InlineKeyboardButton("◀️ Назад", callback_data="menu")],
+                ])
+            )
+            return
+
+        await query.edit_message_text(
+            "🆓 <b>Бесплатный VPN на 10 дней</b>\n\n"
+            "Для получения бесплатного ключа подпишитесь на наш канал:\n\n"
+            f"👉 {FREE_CHANNEL_LINK}\n\n"
+            "После подписки нажмите кнопку «Проверить подписку» ↓",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+[22.05.2026 8:40] Xcz: [InlineKeyboardButton("📢 Подписаться на канал", url=FREE_CHANNEL_LINK)],
+                [InlineKeyboardButton("✅ Проверить подписку", callback_data="check_sub")],
+                [InlineKeyboardButton("◀️ Назад", callback_data="menu")],
+            ])
+        )
+
+    # ── Check subscription ──
+    elif data == "check_sub":
+        if has_used_free_vpn(query.from_user.id):
+            await query.answer("⚠️ Вы уже получали бесплатный ключ.", show_alert=True)
+            return
+
+        try:
+            member = await ctx.bot.get_chat_member(
+                chat_id=FREE_CHANNEL,
+                user_id=query.from_user.id
+            )
+            is_subscribed = member.status in ("member", "administrator", "creator")
+        except Exception:
+            is_subscribed = False
+
+        if not is_subscribed:
+            await query.answer(
+                "❌ Вы не подписаны на канал!\nПодпишитесь и попробуйте снова.",
+                show_alert=True
+            )
+            return
+
+        # Выдаём ключ
+        mark_free_vpn_used(query.from_user.id)
+        expires = (datetime.now() + timedelta(days=FREE_VPN_DAYS)).strftime("%d.%m.%Y")
+
+        await query.edit_message_text(
+            f"✅ <b>Подписка подтверждена!</b>\n\n"
+            f"🎁 Ваш бесплатный VLESS-ключ (действует до <b>{expires}</b>):\n\n"
+            f"<code>{FREE_VPN_KEY}</code>\n\n"
+            "📱 <b>Как подключиться:</b>\n"
+            "• <b>Android:</b> приложение <b>v2rayNG</b>\n"
+            "• <b>iOS:</b> приложение <b>Streisand</b> или <b>Shadowrocket</b>\n"
+            "• <b>Windows:</b> <b>Hiddify</b> или <b>v2rayN</b>\n\n"
+            "Скопируйте ключ и импортируйте его в приложение.\n\n"
+            "⏰ По истечении 10 дней оформите платную подписку:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🛒 Купить подписку", callback_data="buy")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
+            ])
         )
 
     # ── Plan list ──
@@ -229,7 +324,7 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
             "• <b>USDT (TRC-20):</b> <code>UQCTobbYPRi2NTrKhFaRvi4lC7g6Th36PSy4FGq-9C1ifpkD</code>\n"
             "• <b>TON:</b> <code>UQCTobbYPRi2NTrKhFaRvi4lC7g6Th36PSy4FGq-9C1ifpkD</code>\n"
             "• <b>Переводом :</b>2200154519559719 Альфа Банк\n\n"
-            "После оплаты отправьте скриншот или хэш транзакции "
+[22.05.2026 8:40] Xcz: "После оплаты отправьте скриншот или хэш транзакции "
             "в поддержку 👉 @xcz6769\n\n"
             "⏱ Активация в течение 15 минут."
         )
@@ -324,7 +419,7 @@ async def successful_payment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     payload = payment.invoice_payload          # "vpn_3m_123456"
     parts = payload.split("_")
     plan_key = parts[1]                        # "3m"
-    user = update.effective_user
+[22.05.2026 8:40] Xcz: user = update.effective_user
     plan = PLANS[plan_key]
 
     order = save_order(user.id, user.username, plan_key, payment.total_amount // 100)
@@ -360,6 +455,7 @@ async def admin_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         1 for u in db["users"].values()
         if datetime.fromisoformat(u["expires"]) > datetime.now()
     )
+    free_total = len(db.get("free_users", {}))
     plan_counts = {}
     for o in db["orders"]:
         plan_counts[o["plan"]] = plan_counts.get(o["plan"], 0) + 1
@@ -369,7 +465,8 @@ async def admin_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         f"📊 <b>Статистика</b>\n\n"
         f"🧾 Всего заказов: <b>{total}</b>\n"
         f"💰 Выручка: <b>{revenue} ₽</b>\n"
-        f"🟢 Активных подписок: <b>{active}</b>\n\n"
+        f"🟢 Активных подписок: <b>{active}</b>\n"
+        f"🆓 Бесплатных ключей выдано: <b>{free_total}</b>\n\n"
         f"По тарифам:\n" + "\n".join(lines),
         parse_mode="HTML"
     )
@@ -413,7 +510,7 @@ async def admin_git_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Нет доступа.")
         return
-    
+
     git_url = get_git_url()
     await update.message.reply_text(f"📦 Git URL: {git_url}")
 
@@ -429,10 +526,9 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(PreCheckoutQueryHandler(pre_checkout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-
-    logger.info("Bot started.")
+[22.05.2026 8:40] Xcz: logger.info("Bot started.")
     app.run_polling(drop_pending_updates=True)
 
 
-if __name__ == "__main__":
+if name == "__main__":
     main()
