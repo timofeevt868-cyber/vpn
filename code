@@ -10,7 +10,7 @@ import subprocess
 from datetime import datetime, timedelta
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    LabeledPrice
+    LabeledPrice, WebAppInfo
 )
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -21,6 +21,9 @@ from telegram.ext import (
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8643358500:AAGRlhP19NSBSzbVKmCVJatmSBWhioFdvVE")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "8769232009").split(",")]
 PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN", "YOUR_PAYMENT_TOKEN")
+
+# Ссылка на мини-приложение (замени на свой URL после деплоя)
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://timofeevt868-cyber.github.io/miniapp67/")
 
 DB_FILE = "orders.json"
 
@@ -150,6 +153,7 @@ def mark_free_vpn_used(user_id: int) -> None:
 # ── Keyboards ──────────────────────────────────────────────────────────────────
 def main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🌐 Открыть приложение", web_app=WebAppInfo(url=WEBAPP_URL))],
         [InlineKeyboardButton("🆓 Бесплатный VPN на 10 дней", callback_data="free_vpn")],
         [InlineKeyboardButton("🛒 Купить VPN", callback_data="buy")],
         [InlineKeyboardButton("📋 Мой аккаунт", callback_data="account"),
@@ -182,12 +186,12 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     text = (
         f"👋 Привет, <b>{user.first_name}</b>!\n\n"
-        "🔒 <b>SecureVPN</b> — быстрый и надёжный VPN-сервис.\n\n"
+        "🔒 <b>XsanVPN</b> — быстрый и надёжный VPN-сервис.\n\n"
         "✅ Более <b>3 серверов</b> по всему миру\n"
         "✅ WireGuard + OpenVPN протоколы\n"
         "✅ Нет логов, нет ограничений\n"
         "✅ Работает в России 🇷🇺\n\n"
-        "Выберите действие:"
+        "👇 Нажмите <b>«Открыть приложение»</b> для удобного управления подпиской:"
     )
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=main_menu_kb())
 
@@ -385,7 +389,7 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
 
     elif data == "about":
         text = (
-            "ℹ️ <b>О сервисе SecureVPN</b>\n\n"
+            "ℹ️ <b>О сервисе XsanVPN</b>\n\n"
             "🌍 <b>3+ серверов</b> в Европе, Азии, Америке\n"
             "⚡ Протокол <b>WireGuard</b> — самый быстрый\n"
             "🔒 <b>No-Log политика</b> — мы ничего не храним\n"
