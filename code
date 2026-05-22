@@ -1,4 +1,4 @@
-[22.05.2026 8:40] Xcz: """
+"""
 VPN Sales Telegram Bot
 Usage: python bot.py
 """
@@ -10,7 +10,7 @@ import subprocess
 from datetime import datetime, timedelta
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    LabeledPrice, ShippingAddress
+    LabeledPrice
 )
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -20,9 +20,8 @@ from telegram.ext import (
 # ── Configuration ──────────────────────────────────────────────────────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8643358500:AAGRlhP19NSBSzbVKmCVJatmSBWhioFdvVE")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "8769232009").split(",")]
-PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN", "YOUR_PAYMENT_TOKEN")  # from @BotFather
+PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN", "YOUR_PAYMENT_TOKEN")
 
-# File-based storage (replace with a real DB in production)
 DB_FILE = "orders.json"
 
 logging.basicConfig(
@@ -35,7 +34,7 @@ logger = logging.getLogger(__name__)
 PLANS = {
     "1m": {
         "name": "🥉 Базовый — 1 месяц",
-        "price": 90,           # RUB
+        "price": 90,
         "days": 30,
         "devices": 1,
         "speed": "100 Мбит/с",
@@ -73,12 +72,9 @@ FREE_CHANNEL = "@xsanvpn"
 FREE_CHANNEL_LINK = "https://t.me/xsanvpn"
 FREE_VPN_DAYS = 10
 
+
 # ── Mock VPN config generator ──────────────────────────────────────────────────
 def generate_vpn_config(user_id: int, plan_key: str) -> str:
-    """
-    In production: call your VPN panel API (3x-UI, Outline, WireGuard, etc.)
-    and return a real config / access URL.
-    """
     plan = PLANS[plan_key]
     expires = (datetime.now() + timedelta(days=plan["days"])).strftime("%d.%m.%Y")
     return (
@@ -95,6 +91,7 @@ def generate_vpn_config(user_id: int, plan_key: str) -> str:
         f"PersistentKeepalive = 25\n"
     )
 
+
 # ── Storage helpers ────────────────────────────────────────────────────────────
 def load_db() -> dict:
     if os.path.exists(DB_FILE):
@@ -102,9 +99,11 @@ def load_db() -> dict:
             return json.load(f)
     return {"orders": [], "users": {}, "free_users": {}}
 
+
 def save_db(db: dict) -> None:
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(db, f, ensure_ascii=False, indent=2)
+
 
 def save_order(user_id: int, username: str, plan_key: str, amount: int) -> dict:
     db = load_db()
@@ -123,16 +122,19 @@ def save_order(user_id: int, username: str, plan_key: str, amount: int) -> dict:
         "expires": order["expires"],
         "username": username,
     }
-[22.05.2026 8:40] Xcz: save_db(db)
+    save_db(db)
     return order
+
 
 def get_user_sub(user_id: int) -> dict | None:
     db = load_db()
     return db["users"].get(str(user_id))
 
+
 def has_used_free_vpn(user_id: int) -> bool:
     db = load_db()
     return str(user_id) in db.get("free_users", {})
+
 
 def mark_free_vpn_used(user_id: int) -> None:
     db = load_db()
@@ -144,6 +146,7 @@ def mark_free_vpn_used(user_id: int) -> None:
     }
     save_db(db)
 
+
 # ── Keyboards ──────────────────────────────────────────────────────────────────
 def main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -153,6 +156,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
          InlineKeyboardButton("ℹ️ О сервисе", callback_data="about")],
         [InlineKeyboardButton("🆘 Поддержка", url="https://t.me/xsanvpnsup_bot")],
     ])
+
 
 def plans_kb() -> InlineKeyboardMarkup:
     rows = []
@@ -164,12 +168,14 @@ def plans_kb() -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton("◀️ Назад", callback_data="menu")])
     return InlineKeyboardMarkup(rows)
 
+
 def plan_detail_kb(plan_key: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💳 Оплатить через Telegram", callback_data=f"pay:{plan_key}")],
         [InlineKeyboardButton("💸 Оплатить криптой / переводом", callback_data=f"manual:{plan_key}")],
         [InlineKeyboardButton("◀️ К тарифам", callback_data="buy")],
     ])
+
 
 # ── Handlers ───────────────────────────────────────────────────────────────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -191,14 +197,12 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     await query.answer()
     data = query.data
 
-    # ── Main menu ──
     if data == "menu":
         await query.edit_message_text(
             "🏠 <b>Главное меню</b>\n\nВыберите действие:",
             parse_mode="HTML", reply_markup=main_menu_kb()
         )
 
-    # ── Free VPN ──
     elif data == "free_vpn":
         if has_used_free_vpn(query.from_user.id):
             db = load_db()
@@ -223,13 +227,12 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
             "После подписки нажмите кнопку «Проверить подписку» ↓",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
-[22.05.2026 8:40] Xcz: [InlineKeyboardButton("📢 Подписаться на канал", url=FREE_CHANNEL_LINK)],
+                [InlineKeyboardButton("📢 Подписаться на канал", url=FREE_CHANNEL_LINK)],
                 [InlineKeyboardButton("✅ Проверить подписку", callback_data="check_sub")],
                 [InlineKeyboardButton("◀️ Назад", callback_data="menu")],
             ])
         )
 
-    # ── Check subscription ──
     elif data == "check_sub":
         if has_used_free_vpn(query.from_user.id):
             await query.answer("⚠️ Вы уже получали бесплатный ключ.", show_alert=True)
@@ -251,7 +254,6 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
             )
             return
 
-        # Выдаём ключ
         mark_free_vpn_used(query.from_user.id)
         expires = (datetime.now() + timedelta(days=FREE_VPN_DAYS)).strftime("%d.%m.%Y")
 
@@ -272,7 +274,6 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
             ])
         )
 
-    # ── Plan list ──
     elif data == "buy":
         await query.edit_message_text(
             "🛒 <b>Выберите тариф</b>\n\n"
@@ -280,7 +281,6 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
             parse_mode="HTML", reply_markup=plans_kb()
         )
 
-    # ── Plan detail ──
     elif data.startswith("plan:"):
         key = data.split(":")[1]
         p = PLANS[key]
@@ -296,7 +296,6 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         )
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=plan_detail_kb(key))
 
-    # ── Telegram Pay ──
     elif data.startswith("pay:"):
         key = data.split(":")[1]
         plan = PLANS[key]
@@ -313,7 +312,6 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
             protect_content=True,
         )
 
-    # ── Manual pay ──
     elif data.startswith("manual:"):
         key = data.split(":")[1]
         plan = PLANS[key]
@@ -323,8 +321,8 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
             "Способы оплаты:\n"
             "• <b>USDT (TRC-20):</b> <code>UQCTobbYPRi2NTrKhFaRvi4lC7g6Th36PSy4FGq-9C1ifpkD</code>\n"
             "• <b>TON:</b> <code>UQCTobbYPRi2NTrKhFaRvi4lC7g6Th36PSy4FGq-9C1ifpkD</code>\n"
-            "• <b>Переводом :</b>2200154519559719 Альфа Банк\n\n"
-[22.05.2026 8:40] Xcz: "После оплаты отправьте скриншот или хэш транзакции "
+            "• <b>Переводом:</b> 2200154519559719 Альфа Банк\n\n"
+            "После оплаты отправьте скриншот или хэш транзакции "
             "в поддержку 👉 @xcz6769\n\n"
             "⏱ Активация в течение 15 минут."
         )
@@ -335,7 +333,6 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
             ])
         )
 
-    # ── Account ──
     elif data == "account":
         sub = get_user_sub(query.from_user.id)
         if sub:
@@ -367,7 +364,6 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
             ])
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
 
-    # ── Get config ──
     elif data == "getconfig":
         sub = get_user_sub(query.from_user.id)
         if not sub:
@@ -387,7 +383,6 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
             parse_mode="HTML"
         )
 
-    # ── About ──
     elif data == "about":
         text = (
             "ℹ️ <b>О сервисе SecureVPN</b>\n\n"
@@ -416,10 +411,10 @@ async def pre_checkout(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def successful_payment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     payment = update.message.successful_payment
-    payload = payment.invoice_payload          # "vpn_3m_123456"
+    payload = payment.invoice_payload
     parts = payload.split("_")
-    plan_key = parts[1]                        # "3m"
-[22.05.2026 8:40] Xcz: user = update.effective_user
+    plan_key = parts[1]
+    user = update.effective_user
     plan = PLANS[plan_key]
 
     order = save_order(user.id, user.username, plan_key, payment.total_amount // 100)
@@ -494,7 +489,6 @@ async def admin_give(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def get_git_url():
-    """Получить URL Git-репозитория из папки с ботом"""
     try:
         url = subprocess.check_output(
             ['git', 'config', '--get', 'remote.origin.url'],
@@ -510,7 +504,6 @@ async def admin_git_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Нет доступа.")
         return
-
     git_url = get_git_url()
     await update.message.reply_text(f"📦 Git URL: {git_url}")
 
@@ -526,9 +519,10 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(PreCheckoutQueryHandler(pre_checkout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-[22.05.2026 8:40] Xcz: logger.info("Bot started.")
+
+    logger.info("Bot started.")
     app.run_polling(drop_pending_updates=True)
 
 
-if name == "__main__":
+if __name__ == "__main__":
     main()
