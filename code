@@ -23,7 +23,7 @@ ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "8769232009").split(",")]
 PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN", "YOUR_PAYMENT_TOKEN")
 
 # Ссылка на мини-приложение (замени на свой URL после деплоя)
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://timofeevt868-cyber.github.io/miniapp67/")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://timofeevt868-cyber.github.io/miniapp111/")
 
 DB_FILE = "orders.json"
 
